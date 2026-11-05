@@ -1,0 +1,625 @@
+var __defProp = Object.defineProperty;
+var __name = (target, value) => __defProp(target, "name", { value, configurable: true });
+
+// src/worker.js
+import { DurableObject } from "cloudflare:workers";
+var EPOCH = Date.UTC(2026, 10, 5);
+var serverDay = /* @__PURE__ */ __name(() => Math.floor((Date.now() - EPOCH) / 864e5) + 1, "serverDay");
+var json = /* @__PURE__ */ __name((d, s = 200, extra = {}) => new Response(JSON.stringify(d), { status: s, headers: { "content-type": "application/json", "cache-control": "no-store", ...extra } }), "json");
+var clean = /* @__PURE__ */ __name((s, n = 14) => String(s || "").replace(/[\u0000-\u001f<>]/g, "").trim().slice(0, n), "clean");
+var norm = /* @__PURE__ */ __name((s) => String(s || "").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/[^a-z0-9 ']/g, "").trim().slice(0, 40), "norm");
+var CODE_CHARS = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
+var code = /* @__PURE__ */ __name((n) => Array.from(crypto.getRandomValues(new Uint8Array(n)), (b) => CODE_CHARS[b % CODE_CHARS.length]).join(""), "code");
+var okPid = /* @__PURE__ */ __name((p) => typeof p === "string" && /^[a-zA-Z0-9-]{8,64}$/.test(p), "okPid");
+async function body(req) {
+  try {
+    return await req.json();
+  } catch {
+    return {};
+  }
+}
+__name(body, "body");
+var PTS = { mid: 100, close: 70, drift: 40, far: 10, stall: 0 };
+function tierOf(rank, n) {
+  if (!(rank >= 0) || !(n > 0) || rank >= n) return "stall";
+  const pos = n > 1 ? rank / (n - 1) : 0.5, d = Math.abs(pos - 0.5);
+  return d <= 0.1 ? "mid" : d <= 0.22 ? "close" : d <= 0.36 ? "drift" : "far";
+}
+__name(tierOf, "tierOf");
+var worker_default = {
+  async fetch(req, env) {
+    const url = new URL(req.url);
+    if (!url.pathname.startsWith("/api/")) return env.ASSETS.fetch(req);
+    try {
+      const m = url.pathname.match(/^\/api\/room\/([A-Z0-9]{4})\/(ws|info)$/);
+      if (m) return env.ROOMS.get(env.ROOMS.idFromName(m[1])).fetch(req);
+      if (url.pathname === "/api/room/new" && req.method === "POST") {
+        for (let i = 0; i < 6; i++) {
+          const c = code(4), stub = env.ROOMS.get(env.ROOMS.idFromName(c));
+          const r = await stub.fetch(`https://room/api/room/${c}/init`, { method: "POST" });
+          if (r.ok) return json({ code: c });
+        }
+        return json({ error: "busy, try again" }, 503);
+      }
+      return env.STATS.get(env.STATS.idFromName("global")).fetch(req);
+    } catch (e) {
+      return json({ error: String(e && e.message || e) }, 500);
+    }
+  }
+};
+var Stats = class extends DurableObject {
+  static {
+    __name(this, "Stats");
+  }
+  constructor(ctx, env) {
+    super(ctx, env);
+    this.sql = ctx.storage.sql;
+    this.sql.exec(`
+      CREATE TABLE IF NOT EXISTS scores(day INTEGER, pid TEXT, pts INTEGER, metres INTEGER, sq TEXT, ts INTEGER, PRIMARY KEY(day,pid));
+      CREATE TABLE IF NOT EXISTS answers(q TEXT, a TEXT, n INTEGER, PRIMARY KEY(q,a));
+      CREATE TABLE IF NOT EXISTS misses(q TEXT, a TEXT, n INTEGER, PRIMARY KEY(q,a));
+      CREATE TABLE IF NOT EXISTS players(pid TEXT PRIMARY KEY, name TEXT, code TEXT UNIQUE, ts INTEGER);
+      CREATE TABLE IF NOT EXISTS friends(a TEXT, b TEXT, PRIMARY KEY(a,b));
+      CREATE TABLE IF NOT EXISTS seen(day INTEGER, pid TEXT, PRIMARY KEY(day,pid));
+      CREATE TABLE IF NOT EXISTS rooms(code TEXT PRIMARY KEY, players INTEGER, live INTEGER, ts INTEGER);
+    `);
+  }
+  rows(q, ...a) {
+    return this.sql.exec(q, ...a).toArray();
+  }
+  one(q, ...a) {
+    return this.rows(q, ...a)[0];
+  }
+  dist(day, mine) {
+    const pts = this.rows("SELECT pts FROM scores WHERE day=?", day).map((r) => r.pts);
+    const hist = new Array(71).fill(0);
+    pts.forEach((p) => hist[Math.max(0, Math.min(70, Math.round(p / 10)))]++);
+    let better = null;
+    if (mine != null && pts.length > 1) better = Math.round(pts.filter((p) => p < mine).length / (pts.length - 1) * 100);
+    return { day, count: pts.length, hist, better };
+  }
+  player(pid, name) {
+    let p = this.one("SELECT * FROM players WHERE pid=?", pid);
+    if (!p) {
+      let c;
+      do {
+        c = code(6);
+      } while (this.one("SELECT 1 AS x FROM players WHERE code=?", c));
+      this.sql.exec("INSERT INTO players(pid,name,code,ts) VALUES(?,?,?,?)", pid, clean(name) || "Driver", c, Date.now());
+      p = this.one("SELECT * FROM players WHERE pid=?", pid);
+    } else if (name && clean(name) !== p.name) {
+      this.sql.exec("UPDATE players SET name=?, ts=? WHERE pid=?", clean(name), Date.now(), pid);
+      p.name = clean(name);
+    }
+    return p;
+  }
+  async fetch(req) {
+    const url = new URL(req.url), path = url.pathname, POST = req.method === "POST";
+    const today = serverDay();
+    const dayOk = /* @__PURE__ */ __name((d) => Number.isInteger(d) && d >= 1 && Math.abs(d - today) <= 1, "dayOk");
+    if (path === "/api/score" && POST) {
+      const b = await body(req);
+      if (!okPid(b.pid) || !dayOk(b.day)) return json({ error: "bad request" }, 400);
+      const pts = Math.max(0, Math.min(700, b.pts | 0)), metres = pts * 4;
+      const sq = String(b.sq || "").replace(/[^a-z,]/g, "").slice(0, 60);
+      this.sql.exec("INSERT OR IGNORE INTO scores(day,pid,pts,metres,sq,ts) VALUES(?,?,?,?,?,?)", b.day, b.pid, pts, metres, sq, Date.now());
+      const row = this.one("SELECT pts FROM scores WHERE day=? AND pid=?", b.day, b.pid);
+      return json(this.dist(b.day, row.pts));
+    }
+    if (path === "/api/day") {
+      const d = parseInt(url.searchParams.get("d")) || today;
+      const mine = url.searchParams.get("pid");
+      const row = mine ? this.one("SELECT pts FROM scores WHERE day=? AND pid=?", d, mine) : null;
+      return json(this.dist(d, row ? row.pts : null));
+    }
+    if (path === "/api/ping" && POST) {
+      const b = await body(req);
+      if (okPid(b.pid) && dayOk(b.day)) this.sql.exec("INSERT OR IGNORE INTO seen(day,pid) VALUES(?,?)", b.day, b.pid);
+      return this.live(b.day || today);
+    }
+    if (path === "/api/live") return this.live(parseInt(url.searchParams.get("d")) || today);
+    if (path === "/api/answer" && POST) {
+      const b = await body(req), list = Array.isArray(b.items) ? b.items.slice(0, 20) : [];
+      for (const it of list) {
+        const q = clean(it.q, 60), a = norm(it.a);
+        if (!q || !a) continue;
+        const table = it.miss ? "misses" : "answers";
+        this.sql.exec(`INSERT INTO ${table}(q,a,n) VALUES(?,?,1) ON CONFLICT(q,a) DO UPDATE SET n=n+1`, q, a);
+      }
+      return json({ ok: true });
+    }
+    if (path === "/api/pop") {
+      const out = {};
+      for (const r of this.rows("SELECT q,a,n FROM answers")) (out[r.q] ||= {})[r.a] = r.n;
+      return json(out, 200, { "cache-control": "public, max-age=300" });
+    }
+    if (path === "/api/misses") {
+      if (!this.env.ADMIN_KEY || url.searchParams.get("key") !== this.env.ADMIN_KEY) return json({ error: "set ADMIN_KEY and pass ?key=" }, 403);
+      return json(this.rows("SELECT q,a,n FROM misses ORDER BY n DESC LIMIT 500"));
+    }
+    if (path === "/api/me" && POST) {
+      const b = await body(req);
+      if (!okPid(b.pid)) return json({ error: "bad request" }, 400);
+      const p = this.player(b.pid, b.name);
+      return json({ name: p.name, code: p.code });
+    }
+    if (path === "/api/friends/add" && POST) {
+      const b = await body(req);
+      if (!okPid(b.pid)) return json({ error: "bad request" }, 400);
+      const me = this.player(b.pid, b.name);
+      const f = this.one("SELECT pid,name,code FROM players WHERE code=?", String(b.code || "").toUpperCase().trim());
+      if (!f) return json({ error: "No driver with that code" }, 404);
+      if (f.pid === me.pid) return json({ error: "That's your own code" }, 400);
+      this.sql.exec("INSERT OR IGNORE INTO friends(a,b) VALUES(?,?)", me.pid, f.pid);
+      this.sql.exec("INSERT OR IGNORE INTO friends(a,b) VALUES(?,?)", f.pid, me.pid);
+      return json({ ok: true, name: f.name });
+    }
+    if (path === "/api/friends/remove" && POST) {
+      const b = await body(req);
+      const f = this.one("SELECT pid FROM players WHERE code=?", String(b.code || ""));
+      if (okPid(b.pid) && f) {
+        this.sql.exec("DELETE FROM friends WHERE (a=? AND b=?) OR (a=? AND b=?)", b.pid, f.pid, f.pid, b.pid);
+      }
+      return json({ ok: true });
+    }
+    if (path === "/api/friends") {
+      const pid = url.searchParams.get("pid"), d = parseInt(url.searchParams.get("d")) || today;
+      if (!okPid(pid)) return json({ error: "bad request" }, 400);
+      const list = this.rows(`
+        SELECT p.pid, p.name, p.code, s.pts, s.sq,
+          (SELECT COUNT(*) FROM scores x WHERE x.pid=p.pid) AS drives
+        FROM players p LEFT JOIN scores s ON s.pid=p.pid AND s.day=?
+        WHERE p.pid=? OR p.pid IN (SELECT b FROM friends WHERE a=?)`, d, pid, pid);
+      return json(list.map((r) => ({ me: r.pid === pid, name: r.name, code: r.code, pts: r.pts, sq: r.sq, drives: r.drives })));
+    }
+    if (path === "/api/_room" && POST) {
+      const b = await body(req);
+      if (/^[A-Z0-9]{4}$/.test(b.code)) this.sql.exec(
+        "INSERT INTO rooms(code,players,live,ts) VALUES(?,?,?,?) ON CONFLICT(code) DO UPDATE SET players=excluded.players, live=excluded.live, ts=excluded.ts",
+        b.code,
+        b.players | 0,
+        b.live ? 1 : 0,
+        Date.now()
+      );
+      return json({ ok: true });
+    }
+    return json({ error: "not found" }, 404);
+  }
+  live(day) {
+    const cutoff = Date.now() - 15 * 6e4;
+    this.sql.exec("DELETE FROM rooms WHERE ts < ?", Date.now() - 24 * 36e5);
+    const r = this.one("SELECT COUNT(*) AS rooms, COALESCE(SUM(players),0) AS players FROM rooms WHERE live=1 AND ts>?", cutoff);
+    return json({
+      day,
+      drivers: this.one("SELECT COUNT(*) AS n FROM seen WHERE day=?", day).n,
+      finished: this.one("SELECT COUNT(*) AS n FROM scores WHERE day=?", day).n,
+      rooms: r.rooms,
+      partyPlayers: r.players
+    });
+  }
+};
+var COUNTDOWN_MS = 3500;
+var ANSWER_MS = 25e3;
+var REVEAL_MS = 25e3;
+var Room = class extends DurableObject {
+  static {
+    __name(this, "Room");
+  }
+  async load() {
+    return await this.ctx.storage.get("s") || null;
+  }
+  async save(s) {
+    s.ts = Date.now();
+    await this.ctx.storage.put("s", s);
+  }
+  sockets() {
+    return this.ctx.getWebSockets();
+  }
+  online() {
+    return new Set(this.sockets().map((ws) => (ws.deserializeAttachment() || {}).pid));
+  }
+  view(s) {
+    const on = this.online(), showAnswers = s.phase === "reveal" || s.phase === "final";
+    return {
+      t: "state",
+      now: Date.now(),
+      code: s.code,
+      host: s.host,
+      phase: s.phase,
+      rounds: s.rounds,
+      round: s.round,
+      prompt: s.phase === "lobby" ? null : s.order[s.round],
+      deadline: s.deadline,
+      players: s.players.map((p) => ({ pid: p.pid, name: p.name, ci: p.ci, pts: p.pts, metres: p.pts * 4, online: on.has(p.pid), answered: !!s.answers[p.pid], res: p.res })),
+      reveal: showAnswers ? s.last : null
+    };
+  }
+  broadcast(s) {
+    const msg = JSON.stringify(this.view(s));
+    for (const ws of this.sockets()) {
+      try {
+        ws.send(msg);
+      } catch {
+      }
+    }
+  }
+  async registry(s) {
+    try {
+      await this.env.STATS.get(this.env.STATS.idFromName("global")).fetch("https://stats/api/_room", {
+        method: "POST",
+        body: JSON.stringify({ code: s.code, players: s.players.length, live: s.phase !== "final" && this.sockets().length > 0 })
+      });
+    } catch {
+    }
+  }
+  async fetch(req) {
+    const url = new URL(req.url);
+    if (url.pathname.endsWith("/init")) {
+      const s2 = await this.load();
+      if (s2 && Date.now() - s2.ts < 6 * 36e5) return json({ error: "taken" }, 409);
+      const c = url.pathname.split("/")[3];
+      await this.ctx.storage.deleteAll();
+      await this.save({ code: c, host: null, players: [], phase: "lobby", rounds: 5, round: 0, order: [], answers: {}, last: null, deadline: 0 });
+      return json({ ok: true });
+    }
+    if (url.pathname.endsWith("/info")) {
+      const s2 = await this.load();
+      return json(s2 ? { exists: true, phase: s2.phase, players: s2.players.length } : { exists: false });
+    }
+    if (req.headers.get("Upgrade") !== "websocket") return json({ error: "expected websocket" }, 426);
+    const pid = url.searchParams.get("pid"), name = clean(url.searchParams.get("name")) || "Driver";
+    const [client, server] = Object.values(new WebSocketPair());
+    this.ctx.acceptWebSocket(server);
+    const fail = /* @__PURE__ */ __name((msg) => {
+      server.send(JSON.stringify({ t: "error", msg }));
+      server.close(4e3, msg);
+      return new Response(null, { status: 101, webSocket: client });
+    }, "fail");
+    if (!okPid(pid)) return fail("Bad player id");
+    const s = await this.load();
+    if (!s) return fail("Room not found. Check the code.");
+    server.serializeAttachment({ pid });
+    let p = s.players.find((x) => x.pid === pid);
+    if (p) p.name = name;
+    else {
+      if (s.phase !== "lobby") return fail("That race has already started.");
+      if (s.players.length >= 6) return fail("Room is full (6 drivers).");
+      const used = new Set(s.players.map((x) => x.ci));
+      p = { pid, name, ci: [0, 1, 2, 3, 4, 5].find((i) => !used.has(i)), pts: 0, res: [] };
+      s.players.push(p);
+    }
+    if (!s.host || !s.players.some((x) => x.pid === s.host)) s.host = pid;
+    await this.save(s);
+    this.broadcast(s);
+    this.ctx.waitUntil(this.registry(s));
+    return new Response(null, { status: 101, webSocket: client });
+  }
+  async webSocketMessage(ws, raw) {
+    const { pid } = ws.deserializeAttachment() || {};
+    let m;
+    try {
+      m = JSON.parse(raw);
+    } catch {
+      return;
+    }
+    if (m.t === "ping") {
+      ws.send(JSON.stringify({ t: "pong", now: Date.now() }));
+      return;
+    }
+    const s = await this.load();
+    if (!s) return;
+    const isHost = pid === s.host;
+    switch (m.t) {
+      case "rounds":
+        if (isHost && s.phase === "lobby" && [3, 5, 7].includes(m.rounds)) s.rounds = m.rounds;
+        break;
+      case "start": {
+        if (!isHost || s.phase !== "lobby" || s.players.length < 2) return;
+        const order = Array.isArray(m.order) ? m.order.map((n) => n | 0).slice(0, s.rounds) : [];
+        if (order.length < s.rounds) return;
+        s.order = order;
+        s.round = 0;
+        s.last = null;
+        s.players.forEach((p) => {
+          p.pts = 0;
+          p.res = [];
+        });
+        this.countdown(s);
+        break;
+      }
+      case "answer": {
+        if (s.phase !== "answer" || s.answers[pid] || !s.players.some((p) => p.pid === pid)) return;
+        s.answers[pid] = { rank: m.rank | 0, n: m.n | 0, a: clean(m.a, 40), text: clean(m.text, 40) };
+        const on = this.online();
+        if (s.players.filter((p) => on.has(p.pid)).every((p) => s.answers[p.pid])) this.reveal(s);
+        break;
+      }
+      case "next":
+        if (isHost && s.phase === "reveal") this.advance(s);
+        break;
+      case "rematch":
+        if (isHost && s.phase === "final") {
+          s.phase = "lobby";
+          s.round = 0;
+          s.last = null;
+          s.answers = {};
+          s.players.forEach((p) => {
+            p.pts = 0;
+            p.res = [];
+          });
+        }
+        break;
+      case "leave":
+        this.drop(s, pid);
+        try {
+          ws.close(1e3, "left");
+        } catch {
+        }
+        break;
+      default:
+        return;
+    }
+    await this.save(s);
+    this.broadcast(s);
+    this.ctx.waitUntil(this.registry(s));
+  }
+  async webSocketClose(ws) {
+    const { pid } = ws.deserializeAttachment() || {};
+    const s = await this.load();
+    if (!s) return;
+    const stillOn = this.sockets().some((x) => x !== ws && (x.deserializeAttachment() || {}).pid === pid);
+    if (!stillOn && s.phase === "lobby") this.drop(s, pid);
+    else if (!stillOn && s.host === pid) {
+      const on = this.online();
+      on.delete(pid);
+      const nh = s.players.find((p) => on.has(p.pid));
+      if (nh) s.host = nh.pid;
+    }
+    await this.save(s);
+    this.broadcast(s);
+    this.ctx.waitUntil(this.registry(s));
+  }
+  async webSocketError(ws) {
+    return this.webSocketClose(ws);
+  }
+  drop(s, pid) {
+    if (s.phase === "lobby") s.players = s.players.filter((p) => p.pid !== pid);
+    if (s.host === pid) {
+      const on = this.online();
+      on.delete(pid);
+      s.host = (s.players.find((p) => on.has(p.pid)) || s.players[0] || {}).pid || null;
+    }
+  }
+  countdown(s) {
+    s.phase = "countdown";
+    s.answers = {};
+    s.deadline = Date.now() + COUNTDOWN_MS;
+    this.ctx.storage.setAlarm(s.deadline);
+  }
+  answering(s) {
+    s.phase = "answer";
+    s.deadline = Date.now() + ANSWER_MS;
+    this.ctx.storage.setAlarm(s.deadline + 400);
+  }
+  reveal(s) {
+    const counts = {};
+    for (const a of Object.values(s.answers)) if (a.rank >= 0 && a.n > 0) counts[a.a] = (counts[a.a] || 0) + 1;
+    s.last = s.players.map((p) => {
+      const a = s.answers[p.pid] || { rank: -1, n: 0, a: "", text: "" };
+      const t = tierOf(a.rank, a.n), shunt = t !== "stall" && counts[a.a] > 1;
+      const pts = shunt ? Math.floor(PTS[t] / 2) : PTS[t];
+      p.pts += pts;
+      p.res.push({ t, pts, shunt });
+      return { pid: p.pid, a: a.a, t, pts, shunt, pos: a.n > 1 ? a.rank / (a.n - 1) : null };
+    });
+    s.phase = "reveal";
+    s.deadline = Date.now() + REVEAL_MS;
+    this.ctx.storage.setAlarm(s.deadline);
+  }
+  advance(s) {
+    if (s.round + 1 >= s.rounds) {
+      s.phase = "final";
+      s.deadline = 0;
+      this.ctx.storage.deleteAlarm();
+    } else {
+      s.round++;
+      this.countdown(s);
+    }
+  }
+  async alarm() {
+    const s = await this.load();
+    if (!s) return;
+    if (s.phase === "countdown") this.answering(s);
+    else if (s.phase === "answer") this.reveal(s);
+    else if (s.phase === "reveal") this.advance(s);
+    else return;
+    await this.save(s);
+    this.broadcast(s);
+    await this.registry(s);
+  }
+};
+
+// ../../../tmp/wtest/node_modules/wrangler/templates/middleware/middleware-ensure-req-body-drained.ts
+var drainBody = /* @__PURE__ */ __name(async (request, env, _ctx, middlewareCtx) => {
+  try {
+    return await middlewareCtx.next(request, env);
+  } finally {
+    try {
+      if (request.body !== null && !request.bodyUsed) {
+        const reader = request.body.getReader();
+        while (!(await reader.read()).done) {
+        }
+      }
+    } catch (e) {
+      console.error("Failed to drain the unused request body.", e);
+    }
+  }
+}, "drainBody");
+var middleware_ensure_req_body_drained_default = drainBody;
+
+// ../../../tmp/wtest/node_modules/wrangler/templates/middleware/middleware-miniflare3-json-error.ts
+function reduceError(e) {
+  return {
+    name: e?.name,
+    message: e?.message ?? String(e),
+    stack: e?.stack,
+    cause: e?.cause === void 0 ? void 0 : reduceError(e.cause)
+  };
+}
+__name(reduceError, "reduceError");
+var jsonError = /* @__PURE__ */ __name(async (request, env, _ctx, middlewareCtx) => {
+  try {
+    return await middlewareCtx.next(request, env);
+  } catch (e) {
+    const error = reduceError(e);
+    const body2 = JSON.stringify(error);
+    const headers = {
+      "Content-Type": "application/json",
+      "MF-Experimental-Error-Stack": "true"
+    };
+    const encoded = encodeURIComponent(body2);
+    if (encoded.length <= 8192) {
+      headers["MF-Experimental-Error-Stack-Payload"] = encoded;
+    }
+    return new Response(body2, { status: 500, headers });
+  }
+}, "jsonError");
+var middleware_miniflare3_json_error_default = jsonError;
+
+// .wrangler/tmp/bundle-TiQnZN/middleware-insertion-facade.js
+var __INTERNAL_WRANGLER_MIDDLEWARE__ = [
+  middleware_ensure_req_body_drained_default,
+  middleware_miniflare3_json_error_default
+];
+var middleware_insertion_facade_default = worker_default;
+
+// ../../../tmp/wtest/node_modules/wrangler/templates/middleware/common.ts
+var __facade_middleware__ = [];
+function __facade_register__(...args) {
+  __facade_middleware__.push(...args.flat());
+}
+__name(__facade_register__, "__facade_register__");
+function __facade_invokeChain__(request, env, ctx, dispatch, middlewareChain) {
+  const [head, ...tail] = middlewareChain;
+  const middlewareCtx = {
+    dispatch,
+    next(newRequest, newEnv) {
+      return __facade_invokeChain__(newRequest, newEnv, ctx, dispatch, tail);
+    }
+  };
+  return head(request, env, ctx, middlewareCtx);
+}
+__name(__facade_invokeChain__, "__facade_invokeChain__");
+function __facade_invoke__(request, env, ctx, dispatch, finalMiddleware) {
+  return __facade_invokeChain__(request, env, ctx, dispatch, [
+    ...__facade_middleware__,
+    finalMiddleware
+  ]);
+}
+__name(__facade_invoke__, "__facade_invoke__");
+
+// .wrangler/tmp/bundle-TiQnZN/middleware-loader.entry.ts
+var __Facade_ScheduledController__ = class ___Facade_ScheduledController__ {
+  constructor(scheduledTime, cron, noRetry) {
+    this.scheduledTime = scheduledTime;
+    this.cron = cron;
+    this.#noRetry = noRetry;
+  }
+  scheduledTime;
+  cron;
+  static {
+    __name(this, "__Facade_ScheduledController__");
+  }
+  #noRetry;
+  noRetry() {
+    if (!(this instanceof ___Facade_ScheduledController__)) {
+      throw new TypeError("Illegal invocation");
+    }
+    this.#noRetry();
+  }
+};
+function wrapExportedHandler(worker) {
+  if (__INTERNAL_WRANGLER_MIDDLEWARE__ === void 0 || __INTERNAL_WRANGLER_MIDDLEWARE__.length === 0) {
+    return worker;
+  }
+  for (const middleware of __INTERNAL_WRANGLER_MIDDLEWARE__) {
+    __facade_register__(middleware);
+  }
+  const fetchDispatcher = /* @__PURE__ */ __name(function(request, env, ctx) {
+    if (worker.fetch === void 0) {
+      throw new Error("Handler does not export a fetch() function.");
+    }
+    return worker.fetch(request, env, ctx);
+  }, "fetchDispatcher");
+  return {
+    ...worker,
+    fetch(request, env, ctx) {
+      const dispatcher = /* @__PURE__ */ __name(function(type, init) {
+        if (type === "scheduled" && worker.scheduled !== void 0) {
+          const controller = new __Facade_ScheduledController__(
+            Date.now(),
+            init.cron ?? "",
+            () => {
+            }
+          );
+          return worker.scheduled(controller, env, ctx);
+        }
+      }, "dispatcher");
+      return __facade_invoke__(request, env, ctx, dispatcher, fetchDispatcher);
+    }
+  };
+}
+__name(wrapExportedHandler, "wrapExportedHandler");
+function wrapWorkerEntrypoint(klass) {
+  if (__INTERNAL_WRANGLER_MIDDLEWARE__ === void 0 || __INTERNAL_WRANGLER_MIDDLEWARE__.length === 0) {
+    return klass;
+  }
+  for (const middleware of __INTERNAL_WRANGLER_MIDDLEWARE__) {
+    __facade_register__(middleware);
+  }
+  return class extends klass {
+    #fetchDispatcher = /* @__PURE__ */ __name((request, env, ctx) => {
+      this.env = env;
+      this.ctx = ctx;
+      if (super.fetch === void 0) {
+        throw new Error("Entrypoint class does not define a fetch() function.");
+      }
+      return super.fetch(request);
+    }, "#fetchDispatcher");
+    #dispatcher = /* @__PURE__ */ __name((type, init) => {
+      if (type === "scheduled" && super.scheduled !== void 0) {
+        const controller = new __Facade_ScheduledController__(
+          Date.now(),
+          init.cron ?? "",
+          () => {
+          }
+        );
+        return super.scheduled(controller);
+      }
+    }, "#dispatcher");
+    fetch(request) {
+      return __facade_invoke__(
+        request,
+        this.env,
+        this.ctx,
+        this.#dispatcher,
+        this.#fetchDispatcher
+      );
+    }
+  };
+}
+__name(wrapWorkerEntrypoint, "wrapWorkerEntrypoint");
+var WRAPPED_ENTRY;
+if (typeof middleware_insertion_facade_default === "object") {
+  WRAPPED_ENTRY = wrapExportedHandler(middleware_insertion_facade_default);
+} else if (typeof middleware_insertion_facade_default === "function") {
+  WRAPPED_ENTRY = wrapWorkerEntrypoint(middleware_insertion_facade_default);
+}
+var middleware_loader_entry_default = WRAPPED_ENTRY;
+export {
+  Room,
+  Stats,
+  __INTERNAL_WRANGLER_MIDDLEWARE__,
+  middleware_loader_entry_default as default
+};
+//# sourceMappingURL=worker.js.map
