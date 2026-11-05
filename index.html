@@ -386,7 +386,7 @@ const BANK = [
  {q:"name a car brand", a:"ford|bmw|audi|mercedes/mercedes benz/merc|toyota|volkswagen/vw|honda|nissan|vauxhall|tesla|ferrari|porsche|kia|hyundai|mazda|volvo|peugeot|renault|fiat|jaguar/jag|land rover|lamborghini/lambo|mini|skoda|seat|citroen|subaru|mitsubishi|suzuki|lexus|aston martin|bentley|rolls royce|mclaren|alfa romeo|dacia|maserati|bugatti|lotus|jeep|cupra|polestar|genesis|morgan|alpine|koenigsegg|pagani|lada|tvr|saab|rover|caterham|ariel|noble|wartburg|trabant|lancia|ginetta|rimac|spyker"},
  {q:"name a fruit", a:"apple|banana|orange|strawberry|grape|mango|pear|pineapple|watermelon|cherry|peach|kiwi|lemon|blueberry|raspberry|plum|melon|lime|grapefruit|apricot|pomegranate|papaya|coconut|nectarine|fig|blackberry|passion fruit|lychee|cranberry|gooseberry|guava|dragon fruit|clementine|date|tangerine|persimmon|quince|kumquat|starfruit|rambutan|durian|jackfruit|loquat|mangosteen|feijoa|medlar|ugli fruit|salak|cherimoya|tamarillo|physalis"},
  {q:"name a colour", a:"red|blue|green|yellow|purple|orange|pink|black|white|brown|grey/gray|gold|silver|turquoise|navy|teal|maroon|beige|lilac|cyan|magenta|indigo|violet|crimson|lavender|scarlet|cream|burgundy|olive|coral|mint|peach|khaki|amber|azure|ochre|mauve|vermilion|chartreuse|taupe|cerulean|puce|fuchsia|periwinkle|aubergine|sienna|celadon|viridian|gamboge|smalt|falu red"},
- {q:"name a dog breed", a:"labrador/lab|golden retriever|german shepherd|poodle|bulldog|beagle|husky|chihuahua|pug|dachshund/sausage dog|rottweiler|border collie|cocker spaniel|staffordshire bull terrier/staffy|french bulldog/frenchie|jack russell|boxer|dalmatian|great dane|shih tzu|yorkshire terrier/yorkie|greyhound|whippet|doberman|springer spaniel|corgi|pomeranian|cavalier king charles|bichon frise|schnauzer|akita|shiba inu|saint bernard|bloodhound|bull terrier|weimaraner|vizsla|samoyed|newfoundland|basset hound|lurcher|afghan hound|borzoi|saluki|bedlington terrier|otterhound|lagotto romagnolo|komondor|puli|xoloitzcuintli|mudi|azawakh"},
+ {q:"name a dog breed", a:"labrador/lab|golden retriever|german shepherd|poodle|bulldog|beagle|husky|chihuahua/chiwawa|pug|dachshund/sausage dog|rottweiler|border collie|cocker spaniel|staffordshire bull terrier/staffy|french bulldog/frenchie|jack russell|boxer|dalmatian|great dane|shih tzu|yorkshire terrier/yorkie|greyhound|whippet|doberman|springer spaniel|corgi|pomeranian|cavalier king charles|bichon frise|schnauzer|akita|shiba inu|saint bernard|bloodhound|bull terrier|weimaraner|vizsla|samoyed|newfoundland|basset hound|lurcher|afghan hound|borzoi|saluki|bedlington terrier|otterhound|lagotto romagnolo|komondor|puli|xoloitzcuintli|mudi|azawakh"},
  {q:"name a country", a:"france|usa/america/united states/us|china|japan|germany|spain|italy|england|brazil|canada|australia|india|mexico|russia|egypt|ireland|portugal|greece|sweden|norway|argentina|netherlands/holland|switzerland|nigeria|south africa|thailand|poland|turkey|kenya|peru|vietnam|chile|new zealand|belgium|iceland|finland|colombia|morocco|cuba|jamaica|ukraine|austria|denmark|pakistan|indonesia|ghana|nepal|mongolia|estonia|latvia|uruguay|paraguay|laos|bhutan|malawi|eritrea|andorra|liechtenstein|san marino|comoros|djibouti|vanuatu|kiribati|nauru|tuvalu|palau"},
  {q:"name a sport", a:"football/soccer|tennis|basketball|cricket|rugby|golf|swimming|boxing|baseball|hockey|athletics|cycling|netball|volleyball|badminton|snooker|darts|formula 1/f1|table tennis/ping pong|skiing|surfing|gymnastics|rowing|squash|wrestling|bowling|archery|fencing|lacrosse|handball|polo|sailing|judo|karate|curling|water polo|triathlon|motocross|bobsleigh|korfball|hurling|kabaddi|shinty|sepak takraw|underwater hockey|bossaball|jai alai|fives|pato|bandy"},
  {q:"name a pizza topping", a:"pepperoni|cheese|ham|pineapple|mushroom|onion|peppers|sausage|olives|chicken|bacon|jalapenos|tomato|beef|sweetcorn|spinach|anchovies|tuna|chorizo|salami|pesto|rocket|basil|garlic|prawns|goats cheese|artichoke|feta|meatballs|egg|nduja|bbq sauce|chilli|red onion|sun dried tomato|capers|prosciutto|truffle|aubergine|courgette|potato|pear|gorgonzola|fig|pistachio|clams|kebab meat|haggis|black pudding|mortadella"},
@@ -418,21 +418,42 @@ const BANK = [
 /* ---------- helpers ---------- */
 const $=id=>document.getElementById(id);
 const norm = s => s.toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g,"").replace(/&/g,"and").replace(/^the\s+/,"").replace(/[^a-z0-9]/g,"");
-function lev(a,b){ if(Math.abs(a.length-b.length)>2) return 9; const m=a.length,n=b.length; let p=Array.from({length:n+1},(_,i)=>i);
-  for(let i=1;i<=m;i++){ const c=[i]; for(let j=1;j<=n;j++) c[j]=Math.min(p[j]+1,c[j-1]+1,p[j-1]+(a[i-1]===b[j-1]?0:1)); p=c;} return p[n]; }
+function dl(a,b){ // Damerau (optimal string alignment) distance
+  if(Math.abs(a.length-b.length)>3) return 9;
+  const m=a.length,n=b.length, d=[];
+  for(let i=0;i<=m;i++){ d[i]=[i]; } for(let j=0;j<=n;j++) d[0][j]=j;
+  for(let i=1;i<=m;i++) for(let j=1;j<=n;j++){
+    const c=a[i-1]===b[j-1]?0:1;
+    d[i][j]=Math.min(d[i-1][j]+1,d[i][j-1]+1,d[i-1][j-1]+c);
+    if(i>1&&j>1&&a[i-1]===b[j-2]&&a[i-2]===b[j-1]) d[i][j]=Math.min(d[i][j],d[i-2][j-2]+1);
+  }
+  return d[m][n];
+}
+const squash=s=>s.replace(/(.)\1+/g,"$1");
 BANK.forEach(p=>{
   p.list = p.a.split("|").map(s=>s.split("/"));
   p.map = new Map();
   p.list.forEach((al,rank)=>al.forEach(x=>{ const k=norm(x); if(!p.map.has(k)) p.map.set(k,rank); }));
 });
 function match(p, raw){
-  const k = norm(raw); if(!k) return -1;
+  lastFixed=false; const k = norm(raw); if(!k) return -1;
   if(p.map.has(k)) return p.map.get(k);
-  for(const v of [k.replace(/s$/,""), k+"s", k.replace(/es$/,"")]) if(p.map.has(v)) return p.map.get(v);
-  let best=-1, bd=9;
-  for(const [key,rank] of p.map){ if(key.length<5) continue; const d=lev(k,key); const lim=key.length>=8?2:1; if(d<=lim && d<bd){bd=d;best=rank;} }
+  for(const v of [k.replace(/s$/,""), k+"s", k.replace(/es$/,""), k.replace(/ies$/,"y"), k.replace(/y$/,"ies")]) if(v && p.map.has(v)) return p.map.get(v);
+  const ks=squash(k); let best=-1, bd=9;
+  for(const [key,rank] of p.map){
+    if(key.length<4 || k.length<3) continue;
+    if(squash(key)===ks){ lastFixed=true; return rank; }   // doubled/missing double letters
+    if(key.length<6 && key[0]!==k[0]) continue;              // short words must start right (boar ≠ bear)
+    const lim = key.length>=10?3 : key.length>=7?2 : 1;     // longer words allow more typos
+    const d=dl(k,key);
+    if(key.length<=4 && d===1 && k.length===key.length && [...k].sort().join("")!==[...key].sort().join("")) continue; // 4-letter swaps only (fait→fiat), not boar→bear
+    if(d<=lim && d<bd){ bd=d; best=rank; }
+  }
+  if(best>=0) lastFixed=true;
   return best;
 }
+let lastFixed=false;
+function matchFix(p, raw){ lastFixed=false; const rank=match(p,raw); return {rank, fixed:lastFixed}; }
 const TIERS = {
   mid:  {name:"midline",  pts:100, col:"--t-mid",   hex:"#3fd8f0", emo:"🟦"},
   close:{name:"fast lane",pts:70,  col:"--t-close", hex:"#ffe28f", emo:"🟨"},
@@ -737,7 +758,7 @@ const saveG=()=>{ if(G.key) store.set(G.key,G); };
 const hearts=()=> "♥".repeat(G.lives)+"♡".repeat(Math.max(0,3-G.lives));
 function stopTimers(){ clearInterval(timerId); clearInterval(nextId); clearInterval(cdId); clearInterval(waitId); onAnswer=null; world.tow=false; world.markBase=null; }
 
-let curPrompt=null, onAnswer=null, tryList=[], cdId=null, waitId=null;
+let curFixed=false, curPrompt=null, onAnswer=null, tryList=[], cdId=null, waitId=null;
 function setProg(n, done, cur){
   const el=$("sqs"); el.innerHTML="";
   for(let k=0;k<n;k++){ const i=document.createElement("i"); if(done[k]) i.style.background=TIERS[done[k].t].hex; if(k===cur) i.className="cur"; el.appendChild(i); }
@@ -770,7 +791,7 @@ $("form").addEventListener("submit",e=>{
   e.preventDefault(); if(!onAnswer) return;
   const a=$("ans"), v=a.value.trim();
   if(!v){ a.classList.remove("shake"); void a.offsetWidth; a.classList.add("shake"); return; }
-  const rank=match(curPrompt,v);
+  const mf=matchFix(curPrompt,v), rank=mf.rank; curFixed=mf.fixed;
   if(rank<0){
     sfx.wrong(); tryList.push(v);
     a.classList.add("bad"); a.classList.remove("shake"); void a.offsetWidth; a.classList.add("shake");
@@ -803,7 +824,7 @@ function dots(el, res, n){
 }
 function solved(p,text,rank,tries){
   const r=score(p,rank), pts=TIERS[r.t].pts;
-  const e={pi:G.order[G.i],text:text||"",rank,t:r.t,side:r.side||null,pos:r.pos,pts,tries:tries.length};
+  const e={pi:G.order[G.i],text:text||"",rank,t:r.t,side:r.side||null,pos:r.pos,pts,tries:tries.length,fixed:rank>=0&&curFixed};
   G.res.push(e); G.metres+=pts*4; G.pts+=pts; G.i++;
   if(G.mode==="endless" && r.t==="stall") G.lives--;
   const over = G.mode==="endless" ? G.lives<=0 : G.i>=7;
@@ -824,7 +845,7 @@ function resultCard(p,e,r,over){
   $("rTier").textContent=tierLabel(r); $("rTier").style.color=TIERS[r.t].hex;
   $("rSaid").textContent = e.rank>=0 ? `“${cap(p.list[e.rank][0])}”` : "no answer";
   $("rPts").textContent = `+${e.pts} PTS · drive ${e.pts*4}m` + (e.tries?`  ·  ${e.tries} miss${e.tries>1?"es":""}`:"");
-  $("rFlav").textContent = flav(r) + (e.rank>=0 ? ` #${e.rank+1} of ${p.list.length}.` : "");
+  $("rFlav").textContent = (e.fixed ? `autocorrected from “${e.text}” · ` : "") + flav(r) + (e.rank>=0 ? ` #${e.rank+1} of ${p.list.length}.` : "");
   meter($("meter"), e.rank>=0 ? r.pos : null);
   $("nextLabel").textContent = over ? "FINISH" : "DRIVE";
   $("rcard").classList.add("on"); setTimeout(()=>$("b-next").focus(),60);
