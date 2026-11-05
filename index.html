@@ -9,12 +9,13 @@
 <meta property="og:type" content="website">
 <meta property="og:title" content="Midline · the daily drive">
 <meta property="og:description" content="Seven prompts a day. Not too obvious, not too obscure: the middle answer drives furthest.">
-<meta property="og:image" content="/og.png">
+<meta property="og:image" content="https://midline.jamesmsmith555.workers.dev/og.png">
+<meta property="og:url" content="https://midline.jamesmsmith555.workers.dev/">
 <meta property="og:image:width" content="1200"><meta property="og:image:height" content="630">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="Midline · the daily drive">
 <meta name="twitter:description" content="Seven prompts a day. The middle answer drives furthest.">
-<meta name="twitter:image" content="/og.png">
+<meta name="twitter:image" content="https://midline.jamesmsmith555.workers.dev/og.png">
 <link rel="icon" href="/favicon.ico" sizes="32x32">
 <link rel="icon" type="image/png" href="/favicon-32.png" sizes="32x32">
 <link rel="apple-touch-icon" href="/apple-touch-icon.png">
@@ -36,6 +37,9 @@
   }
   *{box-sizing:border-box;margin:0;padding:0}
   html,body{background:var(--navy);color:var(--ink);font-family:var(--mono);min-height:100%}
+  html,body{-webkit-user-select:none;user-select:none;-webkit-touch-callout:none;-webkit-tap-highlight-color:transparent}
+  input,textarea{-webkit-user-select:text;user-select:text;-webkit-touch-callout:default}
+  img,svg,canvas{-webkit-user-drag:none;user-drag:none}
   button{font-family:inherit;touch-action:manipulation}
   ::selection{background:var(--pink);color:var(--navy)}
   :focus-visible{outline:2px solid var(--cyan);outline-offset:2px}
@@ -500,10 +504,12 @@ function setCars(n){ world.cars=[...Array(n)].map((_,i)=>mkCar(i)); RH = n===1?1
 function layout(){
   const W=innerWidth, H=innerHeight; P = W<520?3:4;
   LW=Math.ceil(W/P); LH=Math.ceil(H/P); cv.width=LW; cv.height=LH; cx.imageSmoothingEnabled=false;
+  cv.style.width=(LW*P)+"px"; cv.style.height=(LH*P)+"px";
   HZ=Math.round(LH*HORIZON);
   document.documentElement.style.setProperty("--sky", ((HZ+RH+2)*P)+"px");
 }
-addEventListener("resize",layout);
+addEventListener("resize",layout); addEventListener("orientationchange",()=>setTimeout(layout,200));
+if(window.visualViewport) visualViewport.addEventListener("resize",()=>{ if(document.activeElement!==$("ans")) layout(); });
 setCars(1);
 
 const ZONES=[
@@ -1088,6 +1094,7 @@ document.addEventListener("keydown",e=>{
   const btn = on("rcard")?$("b-next") : on("s-ppass")?$("b-pready") : on("s-preveal")?$("b-pnext") : null;
   if(btn && document.activeElement!==btn && !$("ov").classList.contains("on")){ e.preventDefault(); btn.click(); }
 });
+["copy","cut","contextmenu","selectstart","dragstart"].forEach(ev=>document.addEventListener(ev,e=>{ if(e.target.closest && e.target.closest("input,textarea")) return; e.preventDefault(); }));
 applySettings(); menu();
 if(!store.get("seen",false)){ store.set("seen",true); setTimeout(how,500); }
 </script>
