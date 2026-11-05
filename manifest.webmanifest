@@ -1,0 +1,15 @@
+{
+  "name": "Midline · the daily drive",
+  "short_name": "Midline",
+  "description": "A daily answer game where the middle answer drives furthest.",
+  "start_url": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#050a14",
+  "theme_color": "#050a14",
+  "icons": [
+    { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

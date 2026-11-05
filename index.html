@@ -5,7 +5,26 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#050a14">
 <title>Midline · the daily drive</title>
+<meta name="description" content="A daily answer game where the middle answer drives furthest. Seven prompts, 25 seconds each. Not too obvious, not too obscure.">
+<meta property="og:type" content="website">
+<meta property="og:title" content="Midline · the daily drive">
+<meta property="og:description" content="Seven prompts a day. Not too obvious, not too obscure: the middle answer drives furthest.">
+<meta property="og:image" content="/og.png">
+<meta property="og:image:width" content="1200"><meta property="og:image:height" content="630">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Midline · the daily drive">
+<meta name="twitter:description" content="Seven prompts a day. The middle answer drives furthest.">
+<meta name="twitter:image" content="/og.png">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" type="image/png" href="/favicon-32.png" sizes="32x32">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<link rel="manifest" href="/manifest.webmanifest">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Midline">
 <link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Silkscreen:wght@400;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
 <style>
   :root{
@@ -17,7 +36,10 @@
   }
   *{box-sizing:border-box;margin:0;padding:0}
   html,body{background:var(--navy);color:var(--ink);font-family:var(--mono);min-height:100%}
-  button{font-family:inherit}
+  button{font-family:inherit;touch-action:manipulation}
+  ::selection{background:var(--pink);color:var(--navy)}
+  :focus-visible{outline:2px solid var(--cyan);outline-offset:2px}
+  noscript div{position:fixed;inset:0;z-index:20;display:grid;place-items:center;background:var(--navy);color:var(--ink);font:14px var(--mono);letter-spacing:.2em;text-align:center;padding:20px}
   canvas{position:fixed;inset:0;width:100vw;height:100vh;image-rendering:pixelated;image-rendering:crisp-edges;z-index:0}
   .scan{position:fixed;inset:0;pointer-events:none;z-index:6;
     background:repeating-linear-gradient(to bottom,rgba(255,255,255,.07) 0 1px,rgba(0,0,0,.035) 1px 2px,transparent 2px 4px)}
@@ -182,7 +204,7 @@
   .pcard.gone{opacity:0;transform:translate(-50%,-14px)}
   .count{position:absolute;left:50%;bottom:96px;transform:translateX(-50%);background:rgba(8,16,32,.88);padding:9px 18px;font-size:11px;letter-spacing:.3em;color:#9fb3cf;white-space:nowrap}
   .count b{color:#fff}
-  .abar{position:absolute;left:50%;bottom:18px;transform:translateX(-50%);width:min(640px,94vw);display:flex;flex-direction:column;gap:8px}
+  .abar{position:absolute;left:50%;bottom:calc(18px + env(safe-area-inset-bottom));transform:translateX(-50%);width:min(640px,94vw);display:flex;flex-direction:column;gap:8px}
   .abar .line{display:flex;gap:10px;align-items:center;background:rgba(8,16,32,.92);padding:8px}
   .ring{width:46px;height:46px;flex:0 0 auto;position:relative}
   .ring svg{width:46px;height:46px;transform:rotate(-90deg)}
@@ -215,6 +237,7 @@
 </style>
 </head>
 <body>
+<noscript><div>MIDLINE needs JavaScript to drive.</div></noscript>
 <canvas id="cv"></canvas>
 <div class="scan" id="scan"></div>
 
@@ -442,7 +465,7 @@ const store = {
 };
 
 /* ---------- settings + sound ---------- */
-const S = Object.assign({sound:true,scan:true,calm:false}, store.get("settings",{}));
+const S = Object.assign({sound:true,scan:true,calm: !!(window.matchMedia && matchMedia("(prefers-reduced-motion: reduce)").matches)}, store.get("settings",{}));
 function applySettings(){
   $("scan").style.display = S.scan?"":"none";
   $("sndBtn").classList.toggle("off",!S.sound); $("pSnd").classList.toggle("off",!S.sound);
@@ -678,7 +701,7 @@ $("sndBtn").onclick=()=>{ S.sound=!S.sound; applySettings(); sfx.click(); };
 document.querySelectorAll("[data-set]").forEach(b=>b.onclick=()=>{ const k=b.dataset.set; S[k]=!S[k]; applySettings(); sfx.click(); });
 let resetArmed=false;
 $("resetBtn").onclick=()=>{ if(!resetArmed){ resetArmed=true; $("resetSub").textContent="tap again to wipe"; $("resetSub").style.color="var(--pink)"; setTimeout(()=>{ resetArmed=false; $("resetSub").textContent="tap twice"; $("resetSub").style.color=""; },3000); return; }
-  store.clear(); store.set("settings",S); resetArmed=false; $("resetSub").textContent="wiped"; toast("DATA RESET"); menu(); };
+  store.clear(); store.set("settings",S); store.set("seen",true); resetArmed=false; $("resetSub").textContent="wiped"; toast("DATA RESET"); menu(); };
 document.querySelectorAll("[data-go]").forEach(b=>b.onclick=()=>{ closeDrawer(); sfx.click(); const g=b.dataset.go;
   if(g==="home") menu(); else if(g==="daily") newGame("daily"); else if(g==="endless") newGame("endless"); else if(g==="party") partySetup();
   else if(g==="archive") archive(); else if(g==="stats") stats(); else if(g==="how") how(); });
@@ -896,10 +919,11 @@ function results(){
   if(G.mode==="daily"){ const f=()=>{ const n=new Date(), t=new Date(n.getFullYear(),n.getMonth(),n.getDate()+1), s=Math.max(0,(t-n)/1000|0);
     const el=$("o-next"); if(el) el.textContent=`next ${String(s/3600|0).padStart(2,"0")}:${String((s%3600)/60|0).padStart(2,"0")}:${String(s%60).padStart(2,"0")}`; }; f(); nextId=setInterval(f,1000); }
 }
+const SITE = /^https?:/.test(location.protocol) ? "\n"+location.origin : "";
 function shareText(){
   const sq=G.res.map(e=>TIERS[e.t].emo).join("");
-  if(G.mode==="endless") return `MIDLINE ∞ · ${G.pts} pts · ${fmt(G.metres)}m in ${G.res.length}\n${sq}`;
-  return `MIDLINE #${G.day} · ${G.pts} pts · ${fmt(G.metres)}m\n${sq}`;
+  if(G.mode==="endless") return `MIDLINE ∞ · ${G.pts} pts · ${fmt(G.metres)}m in ${G.res.length}\n${sq}${SITE}`;
+  return `MIDLINE #${G.day} · ${G.pts} pts · ${fmt(G.metres)}m\n${sq}${SITE}`;
 }
 async function copy(t){
   try{ await navigator.clipboard.writeText(t); toast("COPIED"); }
@@ -1019,7 +1043,7 @@ function partyFinal(){
   const pod=[order[1],order[0],order[2]].map((pl,i)=>{ if(!pl) return `<div></div>`; const hgt=[90,140,60][i];
     return `<div><span style="color:${PAL[pl.ci][0]};font-family:var(--px)">${esc(pl.name)}</span><span>${fmt(pl.metres)}m</span><i style="height:${hgt}px;background:${PAL[pl.ci][0]};opacity:.85"></i></div>`; }).join("");
   const table=order.map((pl,i)=>`<div class="r"><i class="sq" style="background:${PAL[pl.ci][0]}"></i><div><span class="q">${i+1}${["st","nd","rd"][i]||"th"}</span>${esc(pl.name)} <span style="letter-spacing:2px">${pl.res.map(r=>r.shunt?"💥":TIERS[r.t].emo).join("")}</span></div><div class="t">${pl.pts} pts<small>${fmt(pl.metres)}m</small></div></div>`).join("");
-  const text=`MIDLINE GRID PARTY · ${G.rounds} rounds\n`+order.map((pl,i)=>`${i+1}. ${pl.name} ${fmt(pl.metres)}m ${pl.res.map(r=>r.shunt?"💥":TIERS[r.t].emo).join("")}`).join("\n");
+  const text=`MIDLINE GRID PARTY · ${G.rounds} rounds\n`+order.map((pl,i)=>`${i+1}. ${pl.name} ${fmt(pl.metres)}m ${pl.res.map(r=>r.shunt?"💥":TIERS[r.t].emo).join("")}`).join("\n")+SITE;
   openOv(`<div class="row"><span class="logo sm">GRID PARTY</span><span class="label">${G.rounds} rounds · ${G.players.length} drivers</span></div>
     <div class="label center">${tie?"dead heat":"winner"}</div>
     <div class="passname" style="color:${PAL[w.ci][0]}">${tie?"TIE!":esc(w.name)}</div>
@@ -1065,6 +1089,7 @@ document.addEventListener("keydown",e=>{
   if(btn && document.activeElement!==btn && !$("ov").classList.contains("on")){ e.preventDefault(); btn.click(); }
 });
 applySettings(); menu();
+if(!store.get("seen",false)){ store.set("seen",true); setTimeout(how,500); }
 </script>
 </body>
 </html>
