@@ -17,8 +17,8 @@ async function body(req) { try { return await req.json(); } catch { return {}; }
 // same tiering as the client
 const PTS = { mid: 100, close: 70, drift: 40, far: 10, stall: 0 };
 function tierOf(rank, n) {
-  if (!(rank >= 0) || !(n > 0) || rank >= n) return "stall";
-  const pos = n > 1 ? rank / (n - 1) : 0.5, d = Math.abs(pos - 0.5);
+  if (!(rank >= 0) || !(n > 0)) return "stall";
+  const pos = n > 1 ? Math.min(1, rank / (n - 1)) : 0.5, d = Math.abs(pos - 0.5);   // past the well-known range = too obscure
   return d <= 0.1 ? "mid" : d <= 0.22 ? "close" : d <= 0.36 ? "drift" : "far";
 }
 
